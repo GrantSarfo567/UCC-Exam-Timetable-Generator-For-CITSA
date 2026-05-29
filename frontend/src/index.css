@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@media print {
+  nav { display: none !important; }
+  .print\:hidden { display: none !important; }
+  .print\:block { display: block !important; }
+  body { background: white !important; }
+  .min-w-\[860px\] { min-width: 100% !important; }
+}
