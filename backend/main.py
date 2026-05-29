@@ -6,8 +6,7 @@ All routers are registered here.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import auth
-from routers import auth, upload
+from routers import auth, upload, timetable
 
 app = FastAPI(
     title="UCC Exam Timetable Generator",
@@ -28,8 +27,8 @@ app.add_middleware(
 
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
-app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(upload.router, prefix="/upload", tags=["Upload"])
+app.include_router(timetable.router, prefix="/timetable", tags=["Timetable"])
 
 # ─────────────────────────────────────────────
 # HEALTH CHECK
