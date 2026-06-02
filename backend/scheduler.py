@@ -18,6 +18,7 @@ Project: UCC Exam Timetable Generator
 
 import csv
 import math
+import random
 from collections import defaultdict
 from pprint import pprint
 
@@ -37,12 +38,12 @@ def load_courses(filepath: str) -> list[dict]:
         reader = csv.DictReader(f)
         for row in reader:
             courses.append({
-                "course_code":   row["course_code"].strip(),
-                "course_name":   row["course_name"].strip(),
-                "department":    row["department"].strip().upper(),
-                "level":         int(row["level"]),
+                "course_code":    row["course_code"].strip(),
+                "course_name":    row["course_name"].strip(),
+                "department":     row["department"].strip().upper(),
+                "level":          int(row["level"]),
                 "enrolled_count": int(row["enrolled_count"]),
-                "lecturer":      row["lecturer"].strip(),
+                "lecturer":       row["lecturer"].strip(),
             })
     return courses
 
@@ -68,7 +69,8 @@ def load_rooms(filepath: str) -> list[dict]:
 def load_slots(filepath: str) -> list[dict]:
     """
     Load time slots from CSV.
-    Expected columns: slot_id, day, label, start_time, end_time
+    Expected columns: slot_id, week, day, label, start_time, end_time
+    The 'week' column is optional — defaults to 1 if not present.
     """
     slots = []
     with open(filepath, newline="", encoding="utf-8") as f:
@@ -76,6 +78,7 @@ def load_slots(filepath: str) -> list[dict]:
         for row in reader:
             slots.append({
                 "slot_id":    int(row["slot_id"]),
+                "week":       int(row["week"]) if "week" in row else 1,
                 "day":        row["day"].strip(),
                 "label":      row["label"].strip(),
                 "start_time": row["start_time"].strip(),
@@ -116,18 +119,29 @@ def rooms_needed(enrolled_count: int, room_capacity: int = 100) -> int:
     return math.ceil(enrolled_count / room_capacity)
 
 
-def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
+def schedule(
+    courses: list[dict],
+    rooms: list[dict],
+    slots: list[dict],
+    max_rooms_per_slot: int = 3,
+) -> dict:
     """
     Main scheduling function.
 
     Strategy (Greedy Graph Colouring):
     1. Sort courses by enrolled_count DESC — hardest to place goes first.
-       (Large courses need more rooms, so they're more constrained.)
+       (Large courses need more rooms, so they are more constrained.)
     2. For each course:
        a. Find which slots are already blocked by its conflict group.
-       b. Find the first slot that is NOT blocked AND has enough free rooms.
+       b. Find the first slot that is NOT blocked, has enough free rooms,
+          AND does not exceed max_rooms_per_slot for that slot.
        c. Assign that slot and mark those rooms as used.
     3. If no valid slot exists → log as unscheduled conflict.
+
+    max_rooms_per_slot controls how many rooms can be occupied in a single
+    slot. A lower value (e.g. 4) forces the algorithm to spread exams across
+    more slots — producing a realistic month-long exam schedule rather than
+    packing everything into the first two weeks.
 
     Returns:
         {
@@ -138,9 +152,8 @@ def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
     """
 
     # Build lookup maps for efficiency
-    room_capacity   = rooms[0]["capacity"]          # All rooms same capacity (100)
-    all_room_ids    = [r["room_id"] for r in rooms]
-    conflict_groups = build_conflict_groups(courses)
+    room_capacity = rooms[0]["capacity"]        # All rooms same capacity (100)
+    all_room_ids  = [r["room_id"] for r in rooms]
 
     # course_code → its conflict group key
     course_to_group = {}
@@ -152,8 +165,8 @@ def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
     # { slot_id: set(room_ids) }
     slot_rooms_used: dict[int, set] = defaultdict(set)
 
-    # Tracks which slot_id each course is assigned to
-    # { course_code: slot_id }
+    # Tracks which slot_ids each conflict group has already used
+    # { (dept, level): [slot_id, ...] }
     group_slot_assignments: dict[tuple, list[int]] = defaultdict(list)
 
     assignments = []
@@ -163,9 +176,9 @@ def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
     sorted_courses = sorted(courses, key=lambda c: c["enrolled_count"], reverse=True)
 
     for course in sorted_courses:
-        code          = course["course_code"]
-        group_key     = course_to_group[code]
-        needed_rooms  = rooms_needed(course["enrolled_count"], room_capacity)
+        code         = course["course_code"]
+        group_key    = course_to_group[code]
+        needed_rooms = rooms_needed(course["enrolled_count"], room_capacity)
 
         # Slots already used by any course in the same conflict group
         blocked_slots = set(group_slot_assignments[group_key])
@@ -179,6 +192,12 @@ def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
             if sid in blocked_slots:
                 continue
 
+            # Enforce max rooms per slot — this is what spreads exams
+            # across the full exam period instead of packing early slots
+            rooms_used_in_slot = len(slot_rooms_used[sid])
+            if rooms_used_in_slot + needed_rooms > max_rooms_per_slot:
+                continue
+
             # Find rooms that are free in this slot
             free_rooms = [
                 r for r in all_room_ids
@@ -189,8 +208,9 @@ def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
             if len(free_rooms) < needed_rooms:
                 continue
 
-            # ✅ Valid slot found — assign it
-            chosen_rooms = free_rooms[:needed_rooms]
+            # Valid slot found — assign it
+            # Randomize room selection so all 10 rooms get used evenly
+            chosen_rooms = random.sample(free_rooms, needed_rooms)
 
             # Mark rooms as occupied in this slot
             slot_rooms_used[sid].update(chosen_rooms)
@@ -207,6 +227,7 @@ def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
                 "enrolled_count": course["enrolled_count"],
                 "rooms_needed":   needed_rooms,
                 "slot_id":        sid,
+                "week":           slot.get("week", 1),
                 "day":            slot["day"],
                 "label":          slot["label"],
                 "start_time":     slot["start_time"],
@@ -225,9 +246,10 @@ def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
                 "department":     course["department"],
                 "level":          course["level"],
                 "enrolled_count": course["enrolled_count"],
-                "reason":         (
+                "reason": (
                     f"No available slot with {needed_rooms} free room(s) "
-                    f"outside conflict group {group_key}"
+                    f"outside conflict group {group_key}. "
+                    f"Consider adding more time slots or increasing max_rooms_per_slot."
                 ),
             })
 
@@ -243,7 +265,7 @@ def schedule(courses: list[dict], rooms: list[dict], slots: list[dict]) -> dict:
 # ─────────────────────────────────────────────
 
 def print_timetable(result: dict, slots: list[dict]):
-    """Pretty-print the generated timetable grouped by day and slot."""
+    """Pretty-print the generated timetable grouped by week, day and slot."""
 
     slot_map = {s["slot_id"]: s for s in slots}
     by_slot  = defaultdict(list)
@@ -255,10 +277,19 @@ def print_timetable(result: dict, slots: list[dict]):
     print("  UCC EXAM TIMETABLE — Computer Science & IT Department")
     print("=" * 70)
 
+    current_week = None
     for sid in sorted(by_slot.keys()):
-        slot     = slot_map[sid]
-        courses  = by_slot[sid]
-        print(f"\n📅  {slot['day'].upper()} | {slot['label']} | {slot['start_time']} – {slot['end_time']}")
+        slot    = slot_map[sid]
+        courses = by_slot[sid]
+        week    = slot.get("week", 1)
+
+        if week != current_week:
+            current_week = week
+            print(f"\n{'─' * 70}")
+            print(f"  WEEK {week}")
+            print(f"{'─' * 70}")
+
+        print(f"\n{slot['day'].upper()} | {slot['label']} | {slot['start_time']} – {slot['end_time']}")
         print("-" * 70)
         for c in sorted(courses, key=lambda x: (x["department"], x["level"])):
             rooms_str = ", ".join(c["rooms_assigned"])
@@ -271,19 +302,19 @@ def print_timetable(result: dict, slots: list[dict]):
             )
 
     print("=" * 70)
-    print(f"\n✅  Scheduled:   {len(result['assignments'])} courses")
-    print(f"⚠️   Unscheduled: {len(result['unscheduled'])} courses")
+    print(f"\nScheduled:   {len(result['assignments'])} courses")
+    print(f"Unscheduled: {len(result['unscheduled'])} courses")
 
     if result["unscheduled"]:
-        print("\n── CONFLICT LOG ──────────────────────────────────────────────")
+        print("\n-- CONFLICT LOG --────────────────────────────────────────────")
         for u in result["unscheduled"]:
-            print(f"  ❌ {u['course_code']} — {u['course_name']}")
+            print(f"  {u['course_code']} — {u['course_name']}")
             print(f"     Reason: {u['reason']}\n")
 
 
 def print_summary(result: dict):
     """Print a quick slot utilisation summary."""
-    print("\n── SLOT UTILISATION ──────────────────────────────────────────")
+    print("\n-- SLOT UTILISATION ──────────────────────────────────────────")
     for sid, rooms in sorted(result["slot_usage"].items()):
         print(f"  Slot {sid:>2}: {len(rooms)} room(s) occupied — {rooms}")
     print()
@@ -301,8 +332,8 @@ if __name__ == "__main__":
 
     print(f"\nLoaded {len(courses)} courses, {len(rooms)} rooms, {len(slots)} slots.")
 
-    # Run algorithm
-    result = schedule(courses, rooms, slots)
+    # Run algorithm — max 3 rooms per slot spreads across full exam period
+    result = schedule(courses, rooms, slots, max_rooms_per_slot=3)
 
     # Print full timetable
     print_timetable(result, slots)
