@@ -21,4 +21,5 @@ Built with React + FastAPI + Supabase.
 1. Grant Sarfo Darkwah
 2. Mack Acquah
 3. Emmanuel Boateng Sarfo
-4. 
+4. John Yedru Elikplim Kwaku
+5. Amofah Acheampong Papa Yaw
